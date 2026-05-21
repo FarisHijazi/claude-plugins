@@ -9,13 +9,20 @@
     {
       "name": "cc-notify",
       "description": "Native macOS notifications + click-to-focus for Claude Code (Notification and Stop hooks)",
-      "version": "1.2.0",
+      "version": "1.3.0",
       "author": {
         "name": "Faris Hijazi"
       },
       "source": "./plugins/cc-notify",
       "category": "productivity",
-      "keywords": ["macos", "notifications", "tmux", "terminal", "aerospace", "click-to-focus"],
+      "keywords": [
+        "macos",
+        "notifications",
+        "tmux",
+        "terminal",
+        "aerospace",
+        "click-to-focus"
+      ],
       "homepage": "https://github.com/FarisHijazi/claude-plugins/tree/main/plugins/cc-notify"
     },
     {
@@ -27,7 +34,13 @@
       },
       "source": "./plugins/hello-world",
       "category": "development",
-      "keywords": ["example", "reference", "debug", "hello-world", "template"],
+      "keywords": [
+        "example",
+        "reference",
+        "debug",
+        "hello-world",
+        "template"
+      ],
       "homepage": "https://github.com/FarisHijazi/claude-plugins/tree/main/plugins/hello-world"
     }
   ]
