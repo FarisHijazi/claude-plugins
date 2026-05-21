@@ -17,6 +17,18 @@
       "category": "productivity",
       "keywords": ["macos", "notifications", "tmux", "terminal", "aerospace", "click-to-focus"],
       "homepage": "https://github.com/FarisHijazi/claude-plugins/tree/main/plugins/cc-notify"
+    },
+    {
+      "name": "hello-world",
+      "description": "Exhaustive reference plugin exercising every feature: hooks, skills, commands, agents, MCP, bin, monitors. For debugging and learning.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Faris Hijazi"
+      },
+      "source": "./plugins/hello-world",
+      "category": "development",
+      "keywords": ["example", "reference", "debug", "hello-world", "template"],
+      "homepage": "https://github.com/FarisHijazi/claude-plugins/tree/main/plugins/hello-world"
     }
   ]
 }

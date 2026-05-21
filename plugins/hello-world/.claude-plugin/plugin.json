@@ -1,0 +1,11 @@
+{
+  "name": "hello-world",
+  "description": "Exhaustive reference plugin exercising every Claude Code plugin feature: hooks, skills, commands, agents, MCP servers, bin executables, and background monitors. Every component logs to /tmp/hello-world-plugin.log for easy debugging.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Faris Hijazi"
+  },
+  "homepage": "https://github.com/FarisHijazi/claude-plugins/tree/main/plugins/hello-world",
+  "license": "MIT",
+  "keywords": ["example", "reference", "debug", "hello-world"]
+}

@@ -19,6 +19,7 @@ Then browse and install plugins:
 | Plugin | Description |
 |---|---|
 | [`cc-notify`](./plugins/cc-notify) | Native macOS notifications + click-to-focus for Claude Code. Banners on Notification and Stop events; click jumps to the exact Terminal window, Aerospace workspace, and tmux session/window/pane. |
+| [`hello-world`](./plugins/hello-world) | Exhaustive reference plugin exercising every feature (hooks, skills, commands, agents, MCP, bin, monitors). For learning + debugging. |
 
 ## Adding a new plugin
 

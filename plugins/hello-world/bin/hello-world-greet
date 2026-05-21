@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Demonstrates the bin/ directory — this script is added to PATH while the
+# hello-world plugin is enabled, so Claude can call it directly via Bash.
+# Try: !hello-world-greet "Faris"
+
+name="${1:-world}"
+printf 'Hello, %s! (from hello-world plugin bin/)\n' "$name"
+printf '[%s] %-25s name=%s\n' "$(date +%T)" "Bin:hello-world-greet" "$name" >> /tmp/hello-world-plugin.log
