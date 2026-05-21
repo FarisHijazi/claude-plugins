@@ -21,6 +21,34 @@ That's it. The plugin's `hooks/hooks.json` registers the `Notification` and `Sto
 
 **First click** triggers two macOS Automation permission prompts ("Terminal would like to control Terminal", "System Events"). Allow them once.
 
+## Optional: keyboard hotkey to "click" the latest banner
+
+macOS doesn't natively let you click a notification banner with the keyboard. The plugin ships `bin/cc-banner-click` — a small script that finds the most recent route file and triggers the same focus action as clicking. Bind it to any hotkey.
+
+**Karabiner-Elements** example (Option+Shift+A): add this rule to `~/.config/karabiner/karabiner.json` under `profiles[0].complex_modifications.rules`:
+
+```json
+{
+  "description": "Focus most-recent Claude Code notification with Option+Shift+A (cc-notify)",
+  "manipulators": [
+    {
+      "type": "basic",
+      "from": {
+        "key_code": "a",
+        "modifiers": { "mandatory": ["option", "shift"], "optional": ["any"] }
+      },
+      "to": [
+        {
+          "shell_command": "\"$HOME/.claude/plugins/marketplaces/farishijazi-plugins/plugins/cc-notify/bin/cc-banner-click\""
+        }
+      ]
+    }
+  ]
+}
+```
+
+The script exits non-zero if no route file exists or focus didn't fire, and the wrapper only dismisses the banner (via `alerter --remove`) on success — so the hotkey is safe to mash.
+
 ## Toggle Stop notifications
 
 `Stop` fires on every assistant turn end — noisy if you're actively iterating. Two gates:
