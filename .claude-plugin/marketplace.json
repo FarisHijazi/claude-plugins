@@ -1,0 +1,22 @@
+{
+  "name": "farishijazi-plugins",
+  "description": "Faris Hijazi's personal Claude Code plugin marketplace.",
+  "owner": {
+    "name": "Faris Hijazi",
+    "url": "https://github.com/FarisHijazi"
+  },
+  "plugins": [
+    {
+      "name": "cc-notify",
+      "description": "Native macOS notifications + click-to-focus for Claude Code (Notification and Stop hooks)",
+      "version": "1.0.0",
+      "author": {
+        "name": "Faris Hijazi"
+      },
+      "source": "./plugins/cc-notify",
+      "category": "productivity",
+      "keywords": ["macos", "notifications", "tmux", "terminal", "aerospace", "click-to-focus"],
+      "homepage": "https://github.com/FarisHijazi/claude-plugins/tree/main/plugins/cc-notify"
+    }
+  ]
+}
