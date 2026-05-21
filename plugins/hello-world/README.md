@@ -13,7 +13,7 @@ Exhaustive reference plugin exercising every Claude Code plugin feature in a sin
 | **Subagent** | `agents/greeter.md` | Spawnable agent that produces a friendly 3-line greeting. |
 | **MCP server** | `.mcp.json` | Wires up Anthropic's `@modelcontextprotocol/server-everything` reference MCP — gives Claude every demo tool/resource the reference server provides. |
 | **Bin executable** | `bin/hello-world-greet` | Added to PATH while plugin is enabled. Try `hello-world-greet Faris`. |
-| **Background monitor** | `monitors/monitors.json` | `tail -F /tmp/hello-world-plugin.log` — surfaces every logged event back into Claude's session as notifications. |
+| ~~Background monitor~~ | (removed) | Originally `tail -F /tmp/hello-world-plugin.log`, but the plugin's own hooks write to that same log → infinite-loop of monitor notifications. **Don't tail a file your hooks write to.** Safe monitor patterns: external log file, CI status, network watch. |
 
 ## Install
 
@@ -54,9 +54,10 @@ hello-world/
 ├── skills/greet/SKILL.md
 ├── commands/ping.md
 ├── agents/greeter.md
-├── bin/hello-world-greet
-└── monitors/monitors.json
+└── bin/hello-world-greet
 ```
+
+(Monitor intentionally removed — see the table note.)
 
 ## Debugging cheat sheet
 

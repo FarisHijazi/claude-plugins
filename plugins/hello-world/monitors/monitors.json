@@ -1,7 +1,0 @@
-[
-  {
-    "name": "hello-log-tail",
-    "description": "Tails the hello-world plugin event log so plugin activity surfaces back as session notifications.",
-    "command": "touch /tmp/hello-world-plugin.log && tail -F /tmp/hello-world-plugin.log"
-  }
-]
