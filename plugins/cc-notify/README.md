@@ -69,7 +69,7 @@ rm ~/.claude/notify.disable_stop       # re-enable
 |---|---|
 | **Terminal.app + tmux** | AppleScript-by-tty finds the exact window/tab, Aerospace switches workspace, `tmux switch-client` + `select-window` + `select-pane` jumps the pane. |
 | **iTerm2 / Ghostty + tmux** | `open -a` + tmux jump. |
-| **VS Code / Cursor integrated terminal** | App activates, `code/cursor --reuse-window $cwd` brings workspace forward. **Cannot focus a specific integrated terminal pane** — VS Code exposes no API. |
+| **VS Code / Cursor integrated terminal** | Focuses the existing editor window whose workspace folder matches `cwd` (exact, then closest parent dir) via Aerospace — no `--reuse-window` (which would re-open a sub-folder as a new view). **Cannot focus a specific integrated terminal pane** — VS Code exposes no API. |
 | **SSH session on remote** | Bell + line appended to remote `~/.claude/inbox.log`. No Mac notification crosses the wire by design. |
 
 ## Why alerter and not `osascript`
