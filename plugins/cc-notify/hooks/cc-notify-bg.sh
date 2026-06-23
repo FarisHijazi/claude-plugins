@@ -5,7 +5,31 @@
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 alerter_bin="$(command -v alerter 2>/dev/null || echo /opt/homebrew/bin/alerter)"
+# Note: the terminal-tab .tab file is written by cc-notify.sh itself (before the
+# Stop banner gating), so the tab updates even when the banner is suppressed.
+
+# Notification icon: impersonating Claude.app's bundle id is the only way to get
+# the orange Claude logo as the icon (Big Sur+ ignores custom --app-icon). BUT
+# macOS SILENTLY DROPS notifications sent under a bundle id that lacks
+# notification permission — and Claude.app usually has none (most people use the
+# Claude Code CLI, not the desktop app), so impersonating it kills the banner and
+# leaves only the terminal bell. So this is OPT-IN: enable it only after you've
+# launched Claude.app once and allowed its notifications.
+#   touch ~/.claude/notify.claude_icon   # opt into the orange Claude icon
+sender_args=()
+if [ -f "$HOME/.claude/notify.claude_icon" ] && [ -d "/Applications/Claude.app" ]; then
+  sender_args=(--sender com.anthropic.claudefordesktop)
+fi
+
+# Orange Claude mark as a right-side content image (extra brand color in the
+# banner body — macOS won't let us color the banner background itself).
+image_args=()
+logo="$script_dir/../assets/claude-logo.png"
+[ -f "$logo" ] && image_args=(--content-image "$logo")
+
 result=$("$alerter_bin" \
+  "${sender_args[@]}" \
+  "${image_args[@]}" \
   --title    "$2" \
   --subtitle "$3" \
   --message  "$4" \

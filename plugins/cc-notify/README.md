@@ -4,6 +4,27 @@ Native macOS notifications + click-to-focus for [Claude Code](https://www.anthro
 
 When Claude needs your attention or finishes a turn, you get a macOS banner. Click it and you jump to the **exact Terminal.app window, Aerospace workspace, and tmux session/window/pane** where Claude is waiting.
 
+## Quickstart
+
+cc-notify is a Claude Code plugin — there's nothing to run; it fires automatically via hooks. Setup:
+
+```text
+/plugin marketplace add FarisHijazi/claude-plugins   # in Claude Code
+/plugin install cc-notify@farishijazi-plugins
+```
+```bash
+brew install vjeantet/tap/alerter                     # the notifier (required)
+```
+
+That's the whole core — you'll now get clickable banners. Optional extras:
+
+1. **VS Code / Cursor terminal-pane focus + live status tabs** — run
+   `"$HOME/.claude/plugins/marketplaces/farishijazi-plugins/plugins/cc-notify/bin/cc-install-editor-extension"`, then reload the editor window. ([details](#optional-focus-the-exact-vs-code--cursor-terminal-pane))
+2. **Keyboard hotkey** to "click" the latest banner — [Karabiner rule](#optional-keyboard-hotkey-to-click-the-latest-banner).
+3. **Outcome emojis** (✅/❌/👍/👎/💬 on the banner + tab) — add the [token instruction](#per-session-color--name) to `~/.claude/CLAUDE.md`.
+
+To verify / debug: `bin/cc-notify-doctor`. After a plugin update, re-run `bin/cc-install-editor-extension` if you use the extension.
+
 ## Install (via marketplace)
 
 ```text
@@ -49,16 +70,92 @@ macOS doesn't natively let you click a notification banner with the keyboard. Th
 
 The script exits non-zero if no route file exists or focus didn't fire, and the wrapper only dismisses the banner (via `alerter --remove`) on success — so the hotkey is safe to mash.
 
-## Toggle Stop notifications
+## Optional: focus the exact VS Code / Cursor terminal pane
 
-`Stop` fires on every assistant turn end — noisy if you're actively iterating. Two gates:
-
-1. **Auto-suppression**: skipped when the originating terminal app is currently frontmost.
-2. **Global kill-switch**: while `~/.claude/notify.disable_stop` exists, Stop never fires.
+By default, clicking a notification from a VS Code / Cursor session focuses the
+right **window**. To also jump to the **exact integrated terminal pane** Claude is
+running in, install the bundled editor extension (one-time):
 
 ```bash
-touch ~/.claude/notify.disable_stop    # silence Stop
-rm ~/.claude/notify.disable_stop       # re-enable
+"$HOME/.claude/plugins/marketplaces/farishijazi-plugins/plugins/cc-notify/bin/cc-install-editor-extension"
+```
+
+Then reload the window in each editor (Cmd+Shift+P → "Developer: Reload Window").
+
+This is the *only* way to focus a specific integrated terminal — VS Code/Cursor
+expose no CLI flag, `vscode://command:` URI, or terminal escape sequence for it.
+The extension ([`editor-extension/`](./editor-extension/)) registers a
+`vscode://farishijazi.cc-notify-focus/focus?pids=…` URI handler and calls
+`terminal.show()` on the terminal whose shell pid matches. See
+[LESSONS.md](./LESSONS.md) gotcha #13.
+
+## Per-session color & name
+
+cc-notify reflects two pieces of Claude Code session identity:
+
+- **Color** — `/color` sets `agentColor` in the transcript; cc-notify maps it to a
+  colored emoji (🔴🟠🟡🟢🔵🟣🩷🩵) and prefixes the banner subtitle with it (the same
+  color your statusline / tmux already show). No `/color` → no emoji.
+- **Name** — `/rename` sets `customTitle` (falls back to Claude's auto `aiTitle`,
+  then the project folder).
+
+**Terminal tab renaming** (needs the [editor extension](#optional-focus-the-exact-vs-code--cursor-terminal-pane)):
+on VS Code / Cursor, cc-notify renames the integrated terminal tab to
+`<status> <color> <session name>` (e.g. `👀 🟠 cc-notify`) so you can tell sessions
+apart — and see their state — at a glance. The status emoji tracks the session:
+
+| State | Emoji |
+|---|---|
+| fresh session (startup) | ⏸️ |
+| working | ⏳ |
+| needs permission | 🔐 |
+| asking you / input | ❓ |
+| done — your turn | 👀 |
+| task complete | ✅ |
+| task failed | ❌ |
+| good news | 👍 |
+| bad news | 👎 |
+| replied / other | 💬 |
+
+The done state can reflect the actual **outcome** (✅/❌/👍/👎/💬) if you instruct
+Claude to end each message with a trailing status emoji — add to your
+`~/.claude/CLAUDE.md`:
+
+> End every response with three spaces, then one of: `✅` task completed / `❌`
+> failed / `👍` good news / `👎` bad news / `💬` neutral. Nothing after it.
+
+(✅/❌ for task outcomes; 👍/👎 when there's no task but clearly good/bad news;
+💬 when neither.)
+
+cc-notify reads that trailing emoji from the transcript on `Stop`. Without it, the
+done state is just 👀 "your turn".
+
+It's driven by a state file the extension watches (`/tmp/cc-notify/<sid>.tab`) —
+**no `open`/URL**, because opening a URL scheme activates the editor and steals
+focus across spaces. The extension renames via the terminal API without raising the
+window, so it never disturbs you. Native tab *color* isn't settable by any VS Code
+API, so the color rides along as the emoji prefix.
+
+## Toggle Stop notifications
+
+`Stop` fires the moment Claude is **fully done** — after every subagent has
+returned and the final response is written (background shells/watchers don't hold
+the turn open). cc-notify fires on it **immediately** rather than relying on Claude
+Code's ~60s idle Notification, so "done" pings are instant. Two opt-outs, both off
+by default:
+
+1. **Global kill-switch**: while `~/.claude/notify.disable_stop` exists, Stop never fires.
+2. **Suppress when focused** (opt-in): while `~/.claude/notify.suppress_when_focused`
+   exists, Stop is skipped when the originating window is already frontmost. Off by
+   default — the frontmost detection is unreliable in VS Code/Cursor and was eating
+   legitimate pings.
+
+```bash
+touch ~/.claude/notify.disable_stop          # silence Stop entirely
+rm ~/.claude/notify.disable_stop             # re-enable
+
+touch ~/.claude/notify.suppress_when_focused # don't ping the window you're on
+rm ~/.claude/notify.suppress_when_focused    # always ping (default)
 ```
 
 `Notification` events (input requests) always fire — those are the high-signal ones.
@@ -69,12 +166,31 @@ rm ~/.claude/notify.disable_stop       # re-enable
 |---|---|
 | **Terminal.app + tmux** | AppleScript-by-tty finds the exact window/tab, Aerospace switches workspace, `tmux switch-client` + `select-window` + `select-pane` jumps the pane. |
 | **iTerm2 / Ghostty + tmux** | `open -a` + tmux jump. |
-| **VS Code / Cursor integrated terminal** | Focuses the existing editor window whose workspace folder matches `cwd` (exact, then closest parent dir) via Aerospace — no `--reuse-window` (which would re-open a sub-folder as a new view). **Cannot focus a specific integrated terminal pane** — VS Code exposes no API. |
+| **VS Code / Cursor integrated terminal** | Focuses the existing editor window whose workspace folder matches `cwd` (exact, then closest parent dir) via Aerospace — no `--reuse-window` (which would re-open a sub-folder as a new view). **With the [companion extension](#optional-focus-the-exact-vs-code--cursor-terminal-pane) installed, it also focuses the exact integrated terminal pane** Claude runs in. |
 | **SSH session on remote** | Bell + line appended to remote `~/.claude/inbox.log`. No Mac notification crosses the wire by design. |
 
 ## Why alerter and not `osascript`
 
 `osascript -e 'display notification'` is truly native but **not clickable** — Apple removed the click-callback path for unsigned scripts in 10.14+. `alerter` uses modern `UNUserNotificationCenter` and returns click signals to stdout. `terminal-notifier` is broken on macOS Tahoe (uses deprecated `NSUserNotification`).
+
+## Icon
+
+The banner always carries an **orange Claude mark** as a right-side content image.
+
+The notification *icon* (left square) can only be overridden by impersonating an
+app's bundle id (`alerter --sender`); on modern macOS (Big Sur+) a custom
+`--app-icon` is ignored. Impersonating `com.anthropic.claudefordesktop` gives the
+orange Claude logo — **but macOS silently drops notifications sent under a bundle
+id that lacks notification permission, and `Claude.app` usually has none** (most
+people run the Claude Code CLI, not the desktop app). That kills the banner and
+leaves only the terminal bell. So the Claude icon is **opt-in**:
+
+```bash
+# 1. Launch Claude.app once and allow its notifications (System Settings → Notifications → Claude)
+# 2. then:
+touch ~/.claude/notify.claude_icon    # use the orange Claude logo as the icon
+rm   ~/.claude/notify.claude_icon     # back to the default authorized sender (reliable banners)
+```
 
 ## How it works
 

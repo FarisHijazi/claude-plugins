@@ -136,3 +136,95 @@ set -g allow-passthrough on
 ```
 
 Then `printf '\033]9;your message\007'` from inside tmux makes iTerm2 show its own native notification on the host machine, with no third-party tool. Doesn't work for Terminal.app, only iTerm2/Ghostty.
+
+## 13. Focusing a specific VS Code / Cursor terminal pane requires an extension
+
+There is **no** way to focus a specific integrated terminal pane from outside the
+editor. Confirmed dead ends (2026):
+
+- **CLI**: `code` / `cursor` have no `--command` / focus flag. `workbench.action.terminal.focusAtIndex1..9` exist internally but can't be invoked from the CLI.
+- **URI**: `open "vscode://command:..."` does **not** execute `command:` URIs — those only run inside trusted contexts (markdown hovers, webviews, tasks), not external `open`.
+- **OSC escape sequences**: shell integration (OSC 633) is one-way (terminal → editor: cwd, exec status). No focus/reveal sequence exists, even though our hook runs *inside* the exact terminal.
+
+The **only** working path is the extension Terminal API: `vscode.window.terminals[*].show()`. So cc-notify ships a ~40-line extension (`editor-extension/`) that registers a URI handler `vscode://farishijazi.cc-notify-focus/focus?pids=…` and calls `.show()` on the terminal whose `processId` is in the pid set.
+
+**Matching by pid, two cases:**
+- **No tmux**: Claude's shell is a direct ancestor of the hook (`hook → claude → shell → editor pty`), so the shell pid (== `Terminal.processId`) is in the hook's ancestor PPID chain.
+- **tmux inside the editor**: the chain hits the launchd-parented tmux *server* and never reaches the editor's shell. The real `Terminal.processId` is the tmux *client's* login shell — a sibling, found via `ps -t <client_tty>`. So cc-notify adds every pid on `client_tty` to the candidate set too.
+
+PIDs are unique per live process, so an ancestor/tty pid can only ever match the terminal we actually came from — never a sibling terminal.
+
+Install unpacked by symlinking the folder into `~/.vscode/extensions/` and `~/.cursor/extensions/` (`bin/cc-install-editor-extension`); reload the window. `Terminal.processId` is a `Thenable<number>` (await it). `terminal.show(false)` reveals **and takes focus** (`true` would preserve focus elsewhere).
+
+## 14. Claude logo on the banner: impersonate the bundle id — but only if it's AUTHORIZED
+
+On modern macOS (Big Sur+) macOS ignores a notifier's custom icon and uses the
+**sending app's** icon. So `alerter --app-icon <path>` does nothing. The icon can
+only be changed by impersonating a bundle id: `alerter --sender com.anthropic.claudefordesktop`
+draws Claude's orange logo (same trick as Boris Buliga's `terminal-notifier -sender`).
+
+**The trap:** macOS **silently drops** a notification whose `--sender` bundle id
+has no notification permission. `Claude.app` is usually unauthorized (people run
+the Claude Code CLI, not the desktop app — it's never launched, never granted
+notification permission). Result: every banner vanishes and you're left with only
+Claude Code's own `terminal_bell` (the `\a` you hear). No error, no banner — looks
+like cc-notify broke.
+
+Check authorization in `~/Library/Preferences/com.apple.ncprefs.plist` (the `apps`
+array, keyed by `bundle-id`, has a `flags` field; absent entirely = never
+authorized). An authorized app (Cursor `com.todesktop.230313mzl4w4u92`, ScriptEditor
+`com.apple.ScriptEditor2`) shows banners; `com.anthropic.claudefordesktop` was
+absent → dropped. `bin/cc-notify-doctor` flags this.
+
+So `--sender` is **opt-in** (`~/.claude/notify.claude_icon`); the default uses
+alerter's own authorized sender so banners always show. The always-on orange comes
+from `--content-image` instead (an attachment, no authorization needed). Don't
+confuse "alerter ran successfully" with "the banner showed" — auth-dropped
+notifications still exit 0.
+
+## 15. Claude Code session name/color live in the transcript JSONL as typed lines
+
+`/rename` writes `{"type":"custom-title","customTitle":"…"}`; Claude auto-writes
+`{"type":"ai-title","aiTitle":"…"}`; `/color` writes `{"type":"agent-color","agentColor":"…"}`
+(also appears inline). There is **no** session name/color in the hook stdin payload
+or any env var — read them from `transcript_path`. Cascade name: customTitle →
+aiTitle → cwd basename. (An earlier research pass wrongly concluded no session name
+exists; the `/rename` → `custom-title` line is the source of truth.)
+
+## 16. `open -g <url>` STILL activates the app — never use it for background updates
+
+`open -g` is documented as "do not bring the application to the foreground," and
+that holds for `open -g -a App`. But `open -g "cursor://…"` (a URL **scheme**)
+*still activates the app* — macOS brings the handler app forward to deliver the
+URL, and under Aerospace that yanks you to the app's workspace. Confirmed by test:
+from workspace 2, `open -g "cursor://…"` jumped focus to workspace 7 (Cursor).
+
+So a URL must only be `open`ed in response to a real user action (clicking a
+notification — activation is wanted there). For **proactive** background updates
+(e.g. renaming a terminal tab on every turn-end) do NOT use `open`. cc-notify
+writes a state file (`/tmp/cc-notify/<sid>.tab`) that the extension watches with
+`fs.watch` and acts on — zero `open`, zero activation, zero focus steal.
+
+Related: `cc-capture-window.sh` must only save the focused window as the jump-back
+target when it belongs to a terminal/editor app. A session driving Chrome (browser
+automation) would otherwise capture Chrome's window → clicking the notification
+focuses Chrome. Whitelist the real hosts (Cursor/Code/Terminal/iTerm2/Ghostty/…).
+
+## 17. Renaming a VS Code/Cursor terminal tab safely (no focus steal)
+
+`workbench.action.terminal.renameWithArg` with `{name}` works, but **only on the
+active terminal** — no terminal-id variant exists. Two ways to target a specific
+non-active terminal, and only one is steal-free:
+- `terminal.show()` first → reveals/raises the window (focus steal). ❌
+- Wait until that terminal is the active one, then `renameWithArg`. ✅
+
+So the extension: on a `.tab` change, if the target's pid == `activeTerminal`'s pid
+→ rename now; else stash it and rename on the next `onDidChangeActiveTerminal`.
+Crucially, `renameWithArg` on an active terminal does **not** raise the window —
+even in a background (unfocused) window it renames silently. So tabs update across
+workspaces with no steal, as long as we never call `show()`.
+
+For single-terminal windows (e.g. one Cursor terminal running tmux) the terminal
+is always the active one, so renames land immediately. Native tab **color** can't
+be set for an existing terminal via any API (`createTerminal({color})` only, and
+even that is unreliable) → use a color **emoji** in the name instead.

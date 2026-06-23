@@ -5,6 +5,8 @@
 
 event_kind="${1:-stop}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+. "$script_dir/cc-lib.sh"
 log="$HOME/.claude/cc-notify.log"
 state_dir="/tmp/cc-notify"
 mkdir -p "$state_dir" 2>/dev/null
@@ -12,16 +14,28 @@ mkdir -p "$state_dir" 2>/dev/null
 input=$(cat 2>/dev/null)
 
 # Parse minimal fields via node (matches existing hook convention, no jq dep).
-read -r session_id cwd message <<<"$(printf '%s' "$input" | node -e '
+# transcript_path comes before the free-text message (paths have no spaces).
+read -r session_id cwd transcript_path notif_type message <<<"$(printf '%s' "$input" | node -e '
 let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
   try{const j=JSON.parse(d||"{}");
     const s=j.session_id||"";
     const c=(j.cwd||"").replace(/\s/g,"_");
+    const t=(j.transcript_path||"").replace(/\s/g,"_")||"-";
+    const n=(j.notification_type||"-").replace(/\s/g,"_");
     const m=(j.message||j.title||"").replace(/\s+/g," ").slice(0,200);
-    process.stdout.write(`${s} ${c} ${m}`);
-  }catch(e){process.stdout.write("  ")}
+    process.stdout.write(`${s} ${c} ${t} ${n} ${m}`);
+  }catch(e){process.stdout.write("    ")}
 });' 2>/dev/null)"
 cwd="${cwd//_/ }"  # restore spaces
+[ "$transcript_path" = "-" ] && transcript_path=""
+transcript_path="${transcript_path//_/ }"
+[ "$notif_type" = "-" ] && notif_type=""
+
+# Session color (/color → agentColor) + name (/rename → customTitle, else auto
+# aiTitle, else project) read from the transcript. See cc-lib.sh.
+cc_session_meta "$transcript_path" "$(basename "${cwd:-$PWD}")"
+emoji="$CC_COLOR_EMOJI"
+session_title="$CC_TITLE"
 
 # SSH branch: hook is running on a remote box. Bell + log, exit.
 if [ -n "$SSH_CONNECTION" ]; then
@@ -54,8 +68,8 @@ _try_walk_tty() {
       */Terminal|Terminal)              [ "$term" = "tmux" ] && term="Apple_Terminal"; gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
       */iTerm2|iTerm2|*/iTerm|iTerm)    [ "$term" = "tmux" ] && term="iTerm.app";      gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
       */Ghostty|Ghostty|*/ghostty|ghostty) [ "$term" = "tmux" ] && term="ghostty";     gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
-      */Cursor|Cursor)                  [ "$term" = "tmux" ] && term="vscode";         gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
-      */Code\ Helper*|*/Electron|*/Code|Code) [ "$term" = "tmux" ] && term="vscode";   gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
+      */Cursor|Cursor)                  [ "$term" = "tmux" ] && term="vscode"; editor_app="Cursor"; gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
+      */Code\ Helper*|*/Electron|*/Code|Code) [ "$term" = "tmux" ] && term="vscode"; editor_app="Code"; gui_pid="$pid"; client_tty="$candidate_tty"; return 0 ;;
     esac
     pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
     hops=$((hops + 1))
@@ -64,6 +78,21 @@ _try_walk_tty() {
 }
 
 gui_pid=""
+editor_app=""
+
+# Capture the ancestor PID chain of this hook. For VS Code / Cursor, the
+# integrated terminal's shell PID (== Terminal.processId) is always one of these,
+# so the editor extension can focus the exact terminal pane on click. PIDs are
+# unique per live process, so an ancestor PID can only match the terminal we
+# actually came from — never a sibling terminal.
+shell_pids=""
+_p=$$
+_h=0
+while [ -n "$_p" ] && [ "$_p" != "1" ] && [ "$_h" -lt 30 ]; do
+  shell_pids="${shell_pids:+$shell_pids,}$_p"
+  _p=$(ps -o ppid= -p "$_p" 2>/dev/null | tr -d ' ')
+  _h=$((_h + 1))
+done
 
 # Primary: walk PPID from our own process up. Works when claude is run
 # directly from a terminal shell (no tmux, or tmux env got stripped along
@@ -78,8 +107,8 @@ while [ -n "$_my_pid" ] && [ "$_my_pid" != "1" ] && [ "$_hops" -lt 30 ]; do
     */Terminal|Terminal)              [ "$term" = "tmux" ] && term="Apple_Terminal"; gui_pid="$_my_pid"; break ;;
     */iTerm2|iTerm2|*/iTerm|iTerm)    [ "$term" = "tmux" ] && term="iTerm.app";      gui_pid="$_my_pid"; break ;;
     */Ghostty|Ghostty|*/ghostty|ghostty) [ "$term" = "tmux" ] && term="ghostty";     gui_pid="$_my_pid"; break ;;
-    */Cursor|Cursor)                  [ "$term" = "tmux" ] && term="vscode";         gui_pid="$_my_pid"; break ;;
-    */Code\ Helper*|*/Electron|*/Code|Code) [ "$term" = "tmux" ] && term="vscode";   gui_pid="$_my_pid"; break ;;
+    */Cursor|Cursor)                  [ "$term" = "tmux" ] && term="vscode"; editor_app="Cursor"; gui_pid="$_my_pid"; break ;;
+    */Code\ Helper*|*/Electron|*/Code|Code) [ "$term" = "tmux" ] && term="vscode"; editor_app="Code"; gui_pid="$_my_pid"; break ;;
   esac
   _my_pid=$(ps -o ppid= -p "$_my_pid" 2>/dev/null | tr -d ' ')
   _hops=$((_hops + 1))
@@ -113,31 +142,56 @@ cwd_basename=$(basename "${cwd:-$PWD}")
 git_branch=$(git -C "${cwd:-$PWD}" symbolic-ref --short HEAD 2>/dev/null)
 
 # Stop event gating.
-if [ "$event_kind" = "stop" ]; then
-  # Kill-switch sentinel.
-  [ -f "$HOME/.claude/notify.disable_stop" ] && exit 0
+#
+# When Claude runs in tmux inside VS Code/Cursor, the integrated terminal's shell
+# (== Terminal.processId) is the tmux *client's* shell — a sibling of our process
+# tree, not an ancestor (our chain hits the launchd-parented tmux server). But it
+# lives on client_tty, so add every pid on that tty to the candidate set.
+shell_pids_all="$shell_pids"
+if [ -n "$client_tty" ]; then
+  for _tp in $(ps -t "${client_tty#/dev/}" -o pid= 2>/dev/null); do
+    shell_pids_all="${shell_pids_all:+$shell_pids_all,}$_tp"
+  done
+fi
 
-  # Window-level frontmost check. Prefer the captured target_wid (most
-  # reliable, especially for editors); fall back to gui_pid-based lookup;
-  # final fallback is app-level frontmost (only used when Aerospace is
-  # unavailable or no window was captured).
-  if command -v aerospace >/dev/null 2>&1; then
-    focused_wid=$(aerospace list-windows --focused --format '%{window-id}' 2>/dev/null)
-    claude_wid="$target_wid"
-    [ -z "$claude_wid" ] && [ -n "$gui_pid" ] \
-      && claude_wid=$(aerospace list-windows --monitor all --pid "$gui_pid" --format '%{window-id}' 2>/dev/null | head -1)
-    if [ -n "$claude_wid" ] && [ "$claude_wid" = "$focused_wid" ]; then
-      exit 0
-    fi
-  else
-    frontmost=$(osascript -e 'tell application "System Events" to name of first application process whose frontmost is true' 2>/dev/null)
-    case "$term" in
-      Apple_Terminal) [ "$frontmost" = "Terminal" ] && exit 0 ;;
-      vscode)         [ "$frontmost" = "Code" ] || [ "$frontmost" = "Cursor" ] && exit 0 ;;
-      iTerm.app)      [ "$frontmost" = "iTerm2" ] || [ "$frontmost" = "iTerm" ] && exit 0 ;;
-      ghostty)        [ "$frontmost" = "ghostty" ] || [ "$frontmost" = "Ghostty" ] && exit 0 ;;
-    esac
-  fi
+# Build the "<status> <color> <session>" line that drives BOTH the banner title
+# and the terminal tab (no wasted "Claude Code" — the orange Claude content-image
+# already brands it). Status: notification → 🔔; stop → ✅/❌/⭕ from the trailing
+# token in Claude's last message (per global CLAUDE.md), else 👀 "your turn".
+if [ "$event_kind" = "notification" ]; then
+  sound="Glass"
+  # Distinguish permission requests (🔐) from questions / idle input (❓), via
+  # notification_type with a message-text fallback. Unknown types → 🔔. The exact
+  # type strings are logged to notiftypes.log so the mapping can be refined.
+  printf '%s\t%s\n' "${notif_type:-?}" "$message" >> "$state_dir/notiftypes.log" 2>/dev/null
+  case "$notif_type $message" in
+    *permission*|*Permission*) status_emoji=$(cc_status_emoji permission); subtitle="Needs permission" ;;
+    *idle*|*waiting*|*input*|*question*) status_emoji=$(cc_status_emoji question); subtitle="Awaiting your input" ;;
+    *) status_emoji=$(cc_status_emoji needs_input); subtitle="Needs your attention" ;;
+  esac
+  body="${message:-Claude needs you}"
+else
+  status_emoji=$(cc_last_status_token "$transcript_path")
+  [ -z "$status_emoji" ] && status_emoji=$(cc_status_emoji idle)
+  sound="Hero"
+  case "$status_emoji" in
+    ✅) subtitle="Task complete" ;;
+    ❌) subtitle="Task failed" ;;
+    👍) subtitle="Good news" ;;
+    👎) subtitle="Bad news" ;;
+    *)  subtitle="Turn complete" ;;
+  esac
+  body="$cwd_basename"
+  [ -n "$git_branch" ] && body="$cwd_basename · $git_branch"
+fi
+title=$(cc_tab_name "$status_emoji" "$emoji" "${session_title:-$cwd_basename}")
+
+# Terminal-tab status — write it ALWAYS, decoupled from the banner gating below.
+# This MUST run even when the Stop banner is suppressed/kill-switched, otherwise
+# the tab gets stuck (e.g. frozen on ⏳). File-based (the extension watches it);
+# NO `open` (which would steal Aerospace focus).
+if [ "$term" = "vscode" ] && [ -n "$shell_pids_all" ]; then
+  ( cc_write_tab "${session_id:-default}" "$shell_pids_all" "$title" </dev/null >/dev/null 2>&1 & )
 fi
 
 # Persist routing payload for the click handler.
@@ -150,23 +204,39 @@ route_file="$state_dir/${session_id:-default}.route"
   printf 'tmux_socket=%q\n' "${TMUX%%,*}"
   printf 'gui_pid=%q\n' "$gui_pid"
   printf 'target_wid=%q\n' "$target_wid"
+  printf 'editor_app=%q\n' "$editor_app"
+  printf 'shell_pids=%q\n' "$shell_pids_all"
 } >"$route_file" 2>/dev/null
 
-# Build notification copy.
-if [ "$event_kind" = "notification" ]; then
-  title="Claude Code"
-  body="${message:-Awaiting input}"
-  sound="Glass"
-else
-  title="Claude Code"
-  body="Turn complete"
-  sound="Hero"
+# Stop BANNER gating (the tab status above already updated, regardless). Both
+# opt-outs are off by default:
+#   notify.disable_stop          — kill-switch: never show the Stop banner.
+#   notify.suppress_when_focused — suppress the Stop banner when the originating
+#                                  window is already frontmost (off by default —
+#                                  frontmost detection is unreliable in editors).
+if [ "$event_kind" = "stop" ]; then
+  [ -f "$HOME/.claude/notify.disable_stop" ] && exit 0
+  if [ -f "$HOME/.claude/notify.suppress_when_focused" ]; then
+    if command -v aerospace >/dev/null 2>&1; then
+      focused_wid=$(aerospace list-windows --focused --format '%{window-id}' 2>/dev/null)
+      claude_wid="$target_wid"
+      [ -z "$claude_wid" ] && [ -n "$gui_pid" ] \
+        && claude_wid=$(aerospace list-windows --monitor all --pid "$gui_pid" --format '%{window-id}' 2>/dev/null | head -1)
+      [ -n "$claude_wid" ] && [ "$claude_wid" = "$focused_wid" ] && exit 0
+    else
+      frontmost=$(osascript -e 'tell application "System Events" to name of first application process whose frontmost is true' 2>/dev/null)
+      case "$term" in
+        Apple_Terminal) [ "$frontmost" = "Terminal" ] && exit 0 ;;
+        vscode)         { [ "$frontmost" = "Code" ] || [ "$frontmost" = "Cursor" ]; } && exit 0 ;;
+        iTerm.app)      { [ "$frontmost" = "iTerm2" ] || [ "$frontmost" = "iTerm" ]; } && exit 0 ;;
+        ghostty)        { [ "$frontmost" = "ghostty" ] || [ "$frontmost" = "Ghostty" ]; } && exit 0 ;;
+      esac
+    fi
+  fi
 fi
-subtitle="$cwd_basename"
-[ -n "$git_branch" ] && subtitle="$cwd_basename ($git_branch)"
 
-# Spawn the bg worker fully detached: the outer subshell exits immediately,
-# orphaning bg to launchd. No quote-nesting, no nohup needed.
+# Spawn the bg worker (the BANNER) fully detached: the outer subshell exits
+# immediately, orphaning bg to launchd. No quote-nesting, no nohup needed.
 ( bash "$script_dir/cc-notify-bg.sh" \
     "${session_id:-default}" "$title" "$subtitle" "$body" "$sound" \
     </dev/null >/dev/null 2>&1 & )
